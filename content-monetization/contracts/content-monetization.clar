@@ -193,3 +193,63 @@
         (ok true)
     )
 )
+
+
+;; Content bundles for discounted purchases
+(define-map content-bundles { bundle-id: uint } 
+    { 
+      creator: principal, 
+      title: (string-ascii 50), 
+      price: uint,
+      content-count: uint
+    })
+
+;; Creator profile and verification
+(define-map creator-profiles { creator: principal } 
+    { 
+      username: (string-ascii 30), 
+      verified: bool, 
+      join-height: uint, 
+      bio: (string-ascii 280)
+    })
+
+(define-constant ERR_PROFILE_EXISTS (err u111))
+
+;; Content rating system
+(define-map content-ratings { content-id: uint, user: principal } { rating: uint, timestamp: uint })
+(define-map content-avg-ratings { content-id: uint } { total-rating: uint, count: uint, avg-rating: uint })
+
+(define-constant ERR_INVALID_RATING (err u108))
+
+;; Submit a rating for content (1-5 stars)
+(define-public (rate-content (content-id uint) (rating uint))
+    (begin
+        ;; Verify content exists
+        (asserts! (is-some (map-get? content { content-id: content-id })) ERR_CONTENT_NOT_FOUND)
+        
+        ;; Verify rating is between 1 and 5
+        (asserts! (and (>= rating u1) (<= rating u5)) ERR_INVALID_RATING)
+        
+        ;; Verify user has access to content
+        (asserts! (unwrap! (has-premium-access content-id tx-sender) ERR_NOT_AUTHORIZED) ERR_NOT_AUTHORIZED)
+        
+        ;; Record user rating
+        (map-set content-ratings { content-id: content-id, user: tx-sender } 
+                { rating: rating, timestamp: stacks-block-height })
+        
+        ;; Update average rating
+        (let (
+            (current-avg (default-to { total-rating: u0, count: u0, avg-rating: u0 } 
+                         (map-get? content-avg-ratings { content-id: content-id })))
+            (total (+ (get total-rating current-avg) rating))
+            (count (+ (get count current-avg) u1))
+        )
+            (map-set content-avg-ratings { content-id: content-id }
+                    { total-rating: total, 
+                      count: count, 
+                      avg-rating: (/ total count) })
+            
+            (ok true)
+        )
+    )
+)
