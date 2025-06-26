@@ -40,3 +40,98 @@
     )
 )
 
+
+;; Get the royalty balance for a creator
+(define-read-only (get-royalty-balance (creator principal))
+    (ok (default-to u0 (get balance (map-get? royalties { creator: creator }))))
+)
+
+;; Extend subscription
+(define-public (extend-subscription (subscriber principal) (creator principal) (duration uint))
+    (begin
+        ;; Ensure the caller is the contract owner or the subscriber
+        (asserts! (or (is-eq tx-sender contract-owner) (is-eq tx-sender subscriber)) ERR_NOT_AUTHORIZED)
+
+        ;; Get the current subscription
+        (let (
+            (subscription (unwrap! (map-get? subscriptions { subscriber: subscriber }) ERR_SUBSCRIPTION_NOT_FOUND))
+            (current-expiry (get expiry subscription))
+        )
+        ;; Update the subscription expiry
+        (map-set subscriptions { subscriber: subscriber } { creator: creator, expiry: (+ current-expiry duration) })
+
+        (ok true)
+    )
+)
+)
+
+;; Get content details
+(define-read-only (get-content-details (content-id uint))
+    (ok (map-get? content { content-id: content-id }))
+)
+
+;; Withdraw royalties for creators
+(define-public (withdraw-royalties)
+    (let (
+        (creator-royalty (unwrap! (map-get? royalties { creator: tx-sender }) ERR_INSUFFICIENT_BALANCE))
+        (balance (get balance creator-royalty))
+    )
+        ;; Ensure creator has royalties to withdraw
+        (asserts! (> balance u0) ERR_INSUFFICIENT_BALANCE)
+        
+        ;; Reset creator balance
+        (map-set royalties { creator: tx-sender } { balance: u0 })
+        
+        ;; Transfer royalties to creator
+        (as-contract (stx-transfer? balance tx-sender tx-sender))
+    )
+)
+
+;; Create premium content with access control
+(define-map premium-content-access { content-id: uint, user: principal } { access: bool })
+
+(define-public (create-premium-content (content-id uint) (price uint) (royalty-percentage uint))
+    (begin
+        ;; Ensure royalty percentage is reasonable (1-50%)
+        (asserts! (and (> royalty-percentage u0) (<= royalty-percentage u50)) ERR_INVALID_ROYALTY)
+        
+        ;; Ensure the content ID does not already exist
+        (asserts! (is-none (map-get? content { content-id: content-id })) ERR_CONTENT_NOT_FOUND)
+        
+        ;; Create premium content entry
+        (map-set content { content-id: content-id } 
+                 { creator: tx-sender, price: price, royalty-percentage: royalty-percentage })
+        
+        (ok true)
+    )
+)
+
+
+;; Purchase access to premium content
+(define-public (purchase-content-access (content-id uint))
+    (let (
+        (content-details (unwrap! (map-get? content { content-id: content-id }) ERR_CONTENT_NOT_FOUND))
+        (creator (get creator content-details))
+        (price (get price content-details))
+        (royalty-percentage (get royalty-percentage content-details))
+    )
+        ;; Transfer payment from user to contract
+        (try! (stx-transfer? price tx-sender (as-contract tx-sender)))
+        
+        ;; Calculate creator royalty
+        (let (
+            (creator-royalty (/ (* price royalty-percentage) u100))
+            (current-royalty (default-to { balance: u0 } (map-get? royalties { creator: creator })))
+            (new-balance (+ (get balance current-royalty) creator-royalty))
+        )
+            ;; Update creator royalty balance
+            (map-set royalties { creator: creator } { balance: new-balance })
+            
+            ;; Grant access to content
+            (map-set premium-content-access { content-id: content-id, user: tx-sender } { access: true })
+            
+            (ok true)
+        )
+    )
+)
+
