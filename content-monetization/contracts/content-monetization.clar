@@ -135,3 +135,61 @@
     )
 )
 
+
+;; Check if user has access to premium content
+(define-read-only (has-premium-access (content-id uint) (user principal))
+    (ok (is-some (map-get? premium-content-access { content-id: content-id, user: user })))
+)
+
+;; Transfer content ownership
+(define-public (transfer-content-ownership (content-id uint) (new-owner principal))
+    (let (
+        (content-details (unwrap! (map-get? content { content-id: content-id }) ERR_CONTENT_NOT_FOUND))
+        (creator (get creator content-details))
+    )
+        ;; Ensure the caller is the content creator
+        (asserts! (is-eq tx-sender creator) ERR_NOT_AUTHORIZED)
+        
+        ;; Update content ownership
+        (map-set content { content-id: content-id } 
+                 { creator: new-owner, 
+                   price: (get price content-details), 
+                   royalty-percentage: (get royalty-percentage content-details) })
+        
+        (ok true)
+    )
+)
+
+
+;; NEW FEATURE: Report content
+(define-map content-reports { content-id: uint, reporter: principal } 
+    { 
+      reason: (string-ascii 100), 
+      timestamp: uint,
+      resolved: bool
+    })
+
+(define-constant ERR_ALREADY_REPORTED (err u114))
+
+;; Report content
+(define-public (report-content (content-id uint) (reason (string-ascii 100)))
+    (begin
+        ;; Ensure content exists
+        (asserts! (is-some (map-get? content { content-id: content-id })) ERR_CONTENT_NOT_FOUND)
+        
+        ;; Ensure hasn't already reported
+        (asserts! (is-none (map-get? content-reports 
+                         { content-id: content-id, reporter: tx-sender })) 
+               ERR_ALREADY_REPORTED)
+        
+        ;; Create report
+        (map-set content-reports { content-id: content-id, reporter: tx-sender }
+                { 
+                 reason: reason, 
+                 timestamp: stacks-block-height,
+                 resolved: false
+                })
+        
+        (ok true)
+    )
+)
